@@ -1,12 +1,20 @@
 
 import { GoogleGenAI, Modality } from "@google/genai";
-import { SYSTEM_PROMPT } from "../constants";
+import { SYSTEM_PROMPT } from "../constants.ts";
 
 export const getAIClient = () => {
-  return new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+  let apiKey = '';
+  try {
+    if (typeof process !== 'undefined' && process.env) {
+      apiKey = process.env.API_KEY || '';
+    }
+  } catch (e) {
+    console.warn("Murshid AI: Environment check bypassed to prevent crash.");
+  }
+  
+  return new GoogleGenAI({ apiKey: apiKey });
 };
 
-// Base64 Helpers required for Live API (no external libs allowed as per rules)
 export function encodeBase64(bytes: Uint8Array) {
   let binary = '';
   const len = bytes.byteLength;
@@ -32,7 +40,10 @@ export async function decodeAudioData(
   sampleRate: number,
   numChannels: number,
 ): Promise<AudioBuffer> {
-  const dataInt16 = new Int16Array(data.buffer);
+  const alignedLength = data.length - (data.length % 2);
+  // Using data.byteOffset is crucial for correctly reading slices of buffers
+  const dataInt16 = new Int16Array(data.buffer, data.byteOffset, alignedLength / 2);
+  
   const frameCount = dataInt16.length / numChannels;
   const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
 

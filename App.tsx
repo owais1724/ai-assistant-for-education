@@ -5,11 +5,11 @@ import {
   MessageSquare, Upload, Settings, 
   Layout, Cpu, Database, Zap, XCircle
 } from 'lucide-react';
-import { AppState, ChatMessage, PDFMetadata } from './types';
-import { SYSTEM_PROMPT } from './constants';
-import { getAIClient, encodeBase64, decodeBase64, decodeAudioData } from './services/geminiService';
-import { extractTextFromPDF } from './services/pdfService';
-import Visualizer from './components/Visualizer';
+import { AppState, ChatMessage, PDFMetadata } from './types.ts';
+import { SYSTEM_PROMPT } from './constants.ts';
+import { getAIClient, encodeBase64, decodeBase64, decodeAudioData } from './services/geminiService.ts';
+import { extractTextFromPDF } from './services/pdfService.ts';
+import Visualizer from './components/Visualizer.tsx';
 import { Modality, LiveServerMessage } from '@google/genai';
 
 const App: React.FC = () => {
@@ -28,12 +28,10 @@ const App: React.FC = () => {
   const stateRef = useRef<AppState>(AppState.IDLE);
   const isModelSpeakingRef = useRef<boolean>(false);
   
-  // Timers to clear on cleanup
   const countdownIntervalRef = useRef<number | null>(null);
   const processingTimeoutRef = useRef<number | null>(null);
   const turnCompleteTimeoutRef = useRef<number | null>(null);
 
-  // Sync state to ref for reliable access in async callbacks
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
@@ -49,13 +47,10 @@ const App: React.FC = () => {
 
   const cleanupSession = useCallback(async () => {
     console.log("Cleaning up session...");
-    
-    // 1. Immediately reset state and UI
     setState(AppState.IDLE);
     setCountdown(null);
     clearAllTimers();
 
-    // 2. Stop all model audio playback
     sourcesRef.current.forEach(s => {
       try { s.stop(); } catch(e) {}
     });
@@ -63,7 +58,6 @@ const App: React.FC = () => {
     nextStartTimeRef.current = 0;
     isModelSpeakingRef.current = false;
 
-    // 3. Close and nullify Live Session
     if (sessionRef.current) {
       try {
         const session = await sessionRef.current;
@@ -76,7 +70,6 @@ const App: React.FC = () => {
       sessionRef.current = null;
     }
 
-    // 4. Stop Microphone and Processor
     if (scriptProcessorRef.current) {
       scriptProcessorRef.current.disconnect();
       scriptProcessorRef.current = null;
@@ -86,7 +79,6 @@ const App: React.FC = () => {
       micStreamRef.current = null;
     }
 
-    // 5. Shutdown Audio Contexts
     if (audioContextInRef.current) {
       await audioContextInRef.current.close().catch(() => {});
       audioContextInRef.current = null;
@@ -101,9 +93,8 @@ const App: React.FC = () => {
     if (stateRef.current === AppState.IDLE) return;
     
     clearAllTimers();
-
     setState(AppState.LISTENING);
-    const listenSeconds = 7; // Extended to 7 seconds to prevent cutting mid-speech
+    const listenSeconds = 7;
     setCountdown(listenSeconds);
     
     countdownIntervalRef.current = window.setInterval(() => {
@@ -117,7 +108,6 @@ const App: React.FC = () => {
     }, 1000);
 
     processingTimeoutRef.current = window.setTimeout(() => {
-      // Transition to processing but DO NOT stop the mic stream yet
       if (stateRef.current === AppState.LISTENING) {
         setState(AppState.PROCESSING);
         setCountdown(null);
@@ -176,7 +166,6 @@ const App: React.FC = () => {
 
             if (message.serverContent?.turnComplete) {
               console.log("AI Turn Ended");
-              // Wait for audio buffers to finish playing before restarting listening
               if (turnCompleteTimeoutRef.current) clearTimeout(turnCompleteTimeoutRef.current);
               turnCompleteTimeoutRef.current = window.setTimeout(() => {
                 if (!isModelSpeakingRef.current && stateRef.current === AppState.PROCESSING) {
@@ -220,7 +209,6 @@ const App: React.FC = () => {
     scriptProcessorRef.current = processor;
 
     processor.onaudioprocess = (e) => {
-      // FIX: Keep the mic hot during LISTENING AND PROCESSING to prevent "cutting" mid-thought
       if (stateRef.current !== AppState.LISTENING && stateRef.current !== AppState.PROCESSING) return;
 
       const inputData = e.inputBuffer.getChannelData(0);
@@ -249,7 +237,7 @@ const App: React.FC = () => {
 
     if (stateRef.current !== AppState.SPEAKING) {
       setState(AppState.SPEAKING);
-      clearAllTimers(); // AI is now in control, stop listening logic
+      clearAllTimers();
       setCountdown(null);
     }
 
@@ -264,7 +252,6 @@ const App: React.FC = () => {
         sourcesRef.current.delete(source);
         if (sourcesRef.current.size === 0) {
           isModelSpeakingRef.current = false;
-          // Loop back to listening when AI is done speaking
           if (stateRef.current === AppState.SPEAKING) {
             startListeningWindow();
           }
@@ -289,7 +276,6 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center p-4 md:p-8">
-      {/* Header */}
       <header className="w-full max-w-4xl flex justify-between items-center mb-8">
         <div className="flex items-center space-x-3">
           <div className="p-2 bg-blue-600 rounded-lg text-white">
@@ -315,9 +301,7 @@ const App: React.FC = () => {
         <ArchitectureView />
       ) : (
         <div className="w-full max-w-4xl grid grid-cols-1 lg:grid-cols-3 gap-8 h-full">
-          {/* Main Interface */}
           <div className="lg:col-span-2 flex flex-col bg-white rounded-3xl border border-gray-100 shadow-2xl overflow-hidden min-h-[600px] relative">
-            
             <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
               <div className="flex items-center space-x-2">
                 <div className={`w-3 h-3 rounded-full ${state !== AppState.IDLE ? 'bg-green-500 animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-gray-300'}`} />
@@ -397,7 +381,6 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Sidebar */}
           <div className="space-y-6 flex flex-col h-full">
             <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-xl">
               <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">

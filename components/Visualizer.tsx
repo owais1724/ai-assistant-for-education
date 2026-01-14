@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { AppState } from '../types';
+import { AppState } from '../types.ts';
 
 interface VisualizerProps {
   state: AppState;
