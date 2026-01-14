@@ -46,7 +46,7 @@ const App: React.FC = () => {
   }, []);
 
   const cleanupSession = useCallback(async () => {
-    console.log("Cleaning up session...");
+    console.log("Murshid AI: Cleaning up session...");
     setState(AppState.IDLE);
     setCountdown(null);
     clearAllTimers();
@@ -65,7 +65,7 @@ const App: React.FC = () => {
           session.close();
         }
       } catch (e) {
-        console.warn("Error closing session:", e);
+        console.warn("Murshid AI: Session close error", e);
       }
       sessionRef.current = null;
     }
@@ -94,7 +94,7 @@ const App: React.FC = () => {
     
     clearAllTimers();
     setState(AppState.LISTENING);
-    const listenSeconds = 7;
+    const listenSeconds = 8; // Extended to give more time to think/speak
     setCountdown(listenSeconds);
     
     countdownIntervalRef.current = window.setInterval(() => {
@@ -119,7 +119,7 @@ const App: React.FC = () => {
     if (stateRef.current !== AppState.IDLE) return;
 
     try {
-      console.log("Initializing Murshid AI Session...");
+      console.log("Murshid AI: Starting session...");
       setState(AppState.PROCESSING);
       
       const ai = getAIClient();
@@ -147,7 +147,7 @@ const App: React.FC = () => {
         },
         callbacks: {
           onopen: () => {
-            console.log("Pipeline Ready");
+            console.log("Murshid AI: Connection Open");
             setupMicStreaming(stream, sessionPromise);
             startListeningWindow();
           },
@@ -165,21 +165,21 @@ const App: React.FC = () => {
             }
 
             if (message.serverContent?.turnComplete) {
-              console.log("AI Turn Ended");
+              // Only reset listening if we're not currently in the middle of speaking/playing
               if (turnCompleteTimeoutRef.current) clearTimeout(turnCompleteTimeoutRef.current);
               turnCompleteTimeoutRef.current = window.setTimeout(() => {
-                if (!isModelSpeakingRef.current && stateRef.current === AppState.PROCESSING) {
+                if (!isModelSpeakingRef.current && (stateRef.current === AppState.PROCESSING || stateRef.current === AppState.SPEAKING)) {
                   startListeningWindow();
                 }
-              }, 800);
+              }, 1000);
             }
           },
           onerror: (e) => {
-            console.error("Session Protocol Error:", e);
+            console.error("Murshid AI: Session Error", e);
             cleanupSession();
           },
           onclose: (e) => {
-            console.log("Connection Terminated", e);
+            console.log("Murshid AI: Connection Closed");
             cleanupSession();
           }
         }
@@ -188,7 +188,7 @@ const App: React.FC = () => {
       sessionRef.current = sessionPromise;
 
     } catch (err) {
-      console.error("Critical Failure:", err);
+      console.error("Murshid AI: Setup Failed", err);
       cleanupSession();
     }
   };
@@ -209,6 +209,7 @@ const App: React.FC = () => {
     scriptProcessorRef.current = processor;
 
     processor.onaudioprocess = (e) => {
+      // Allow mic input during LISTENING and PROCESSING to prevent early cuts
       if (stateRef.current !== AppState.LISTENING && stateRef.current !== AppState.PROCESSING) return;
 
       const inputData = e.inputBuffer.getChannelData(0);
@@ -252,6 +253,7 @@ const App: React.FC = () => {
         sourcesRef.current.delete(source);
         if (sourcesRef.current.size === 0) {
           isModelSpeakingRef.current = false;
+          // Return to listening after response is finished
           if (stateRef.current === AppState.SPEAKING) {
             startListeningWindow();
           }
@@ -262,7 +264,7 @@ const App: React.FC = () => {
       nextStartTimeRef.current += buffer.duration;
       sourcesRef.current.add(source);
     } catch (e) {
-      console.error("Stream Decoding Failure:", e);
+      console.error("Murshid AI: Audio Decode Error", e);
     }
   };
 
@@ -304,11 +306,11 @@ const App: React.FC = () => {
           <div className="lg:col-span-2 flex flex-col bg-white rounded-3xl border border-gray-100 shadow-2xl overflow-hidden min-h-[600px] relative">
             <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
               <div className="flex items-center space-x-2">
-                <div className={`w-3 h-3 rounded-full ${state !== AppState.IDLE ? 'bg-green-500 animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-gray-300'}`} />
-                <span className="text-sm font-bold text-gray-700 capitalize tracking-tight">{state.replace(/_/g, ' ')}</span>
+                <div className={`w-3 h-3 rounded-full ${state !== AppState.IDLE ? 'bg-green-500 animate-pulse' : 'bg-gray-300'}`} />
+                <span className="text-sm font-bold text-gray-700 capitalize tracking-tight">{state.toLowerCase()}</span>
               </div>
               {countdown !== null && (
-                <div className="flex items-center gap-2 text-xs font-black bg-blue-600 text-white px-4 py-1.5 rounded-full shadow-lg transition-all duration-300">
+                <div className="flex items-center gap-2 text-xs font-black bg-blue-600 text-white px-4 py-1.5 rounded-full shadow-lg">
                   <Mic size={14} />
                   LISTENING: {countdown}s
                 </div>
@@ -318,9 +320,8 @@ const App: React.FC = () => {
             <div className="flex-1 p-8 flex flex-col items-center justify-center text-center space-y-8">
               <div className={`relative transition-all duration-500 transform ${state !== AppState.IDLE ? 'scale-110' : 'scale-100'}`}>
                 <div className={`w-40 h-40 rounded-full flex items-center justify-center relative transition-colors duration-300 ${
-                  state === AppState.LISTENING ? 'bg-red-50 ring-4 ring-red-100' : 
-                  state === AppState.SPEAKING ? 'bg-blue-50 ring-4 ring-blue-100' : 
-                  state === AppState.PROCESSING ? 'bg-amber-50 ring-4 ring-amber-100' : 'bg-gray-50'
+                  state === AppState.LISTENING ? 'bg-red-50' : 
+                  state === AppState.SPEAKING ? 'bg-blue-50' : 'bg-gray-50'
                 }`}>
                   {state === AppState.LISTENING && (
                     <div className="absolute inset-0 rounded-full border-4 border-red-500 animate-ping opacity-20" />
@@ -329,8 +330,6 @@ const App: React.FC = () => {
                     <Volume2Icon className="text-blue-600" size={56} />
                   ) : state === AppState.LISTENING ? (
                     <Mic className="text-red-600" size={56} />
-                  ) : state === AppState.PROCESSING ? (
-                    <Zap className="text-amber-500 animate-pulse" size={56} />
                   ) : (
                     <MessageSquare className="text-gray-300" size={56} />
                   )}
@@ -338,86 +337,76 @@ const App: React.FC = () => {
               </div>
 
               <div className="max-w-xs space-y-3">
-                <h3 className="text-2xl font-black text-gray-900 leading-tight">
-                  {state === AppState.IDLE ? "Start Learning" : 
-                   state === AppState.LISTENING ? "Tell me anything" : 
-                   state === AppState.PROCESSING ? "AI is thinking..." : "Murshid Speaking..."}
+                <h3 className="text-2xl font-black text-gray-900 leading-tight uppercase tracking-tighter">
+                  {state === AppState.IDLE ? "Start Session" : 
+                   state === AppState.LISTENING ? "Listening..." : 
+                   state === AppState.PROCESSING ? "Analyzing..." : "Speaking..."}
                 </h3>
                 <p className="text-sm text-gray-500 font-medium leading-relaxed">
                   {state === AppState.IDLE 
-                    ? "Connect for English-first academic support. Multilingual on request."
+                    ? "Tap the button below to start your academic session with Murshid AI."
                     : state === AppState.LISTENING 
-                      ? "Keep speaking. I'm listening to your complete question."
-                      : state === AppState.PROCESSING 
-                        ? "Streaming tokens and processing neural audio..."
-                        : "High-speed interaction loop is active."}
+                      ? "I am listening for your question. Speak naturally."
+                      : "Processing and generating real-time response."}
                 </p>
               </div>
 
               <Visualizer state={state} />
             </div>
 
-            <div className="p-8 border-t border-gray-100 bg-white grid grid-cols-1 gap-4">
+            <div className="p-8 border-t border-gray-100 bg-white">
               {state === AppState.IDLE ? (
                 <button
                   onClick={startLiveConversation}
-                  className="group w-full py-5 rounded-2xl bg-blue-600 text-white flex items-center justify-center space-x-4 font-black text-lg transition-all transform hover:bg-blue-700 hover:shadow-xl active:scale-[0.98]"
+                  className="w-full py-5 rounded-2xl bg-blue-600 text-white flex items-center justify-center space-x-4 font-black text-lg transition-all hover:bg-blue-700 shadow-xl active:scale-[0.98]"
                 >
-                  <Zap size={24} className="fill-current group-hover:scale-125 transition-transform" />
+                  <Zap size={24} />
                   <span>START CONVERSATION</span>
                 </button>
               ) : (
                 <button
                   onClick={cleanupSession}
-                  className="w-full py-5 rounded-2xl bg-red-50 text-red-600 border-2 border-red-100 flex items-center justify-center space-x-4 font-black text-lg transition-all transform hover:bg-red-600 hover:text-white hover:shadow-xl active:scale-[0.98]"
+                  className="w-full py-5 rounded-2xl bg-red-50 text-red-600 border border-red-100 flex items-center justify-center space-x-4 font-black text-lg transition-all hover:bg-red-100 active:scale-[0.98]"
                 >
                   <XCircle size={24} />
-                  <span>END CONVERSATION</span>
+                  <span>END SESSION</span>
                 </button>
               )}
-              <p className="text-[10px] text-center font-bold text-gray-400 uppercase tracking-widest">
-                {state === AppState.IDLE ? "Ready for Academic Queries" : "Session Active • Anti-Cut Loop Engaged"}
-              </p>
             </div>
           </div>
 
-          <div className="space-y-6 flex flex-col h-full">
+          <div className="space-y-6 flex flex-col">
             <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-xl">
               <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
                 <Upload size={14} className="text-blue-500" />
-                Textbook Grounding
+                Textbook (PDF)
               </h3>
-              <div className="space-y-4">
-                {pdf ? (
-                  <div className="p-4 bg-green-50 border border-green-200 rounded-2xl flex items-center space-x-3">
-                    <ShieldCheck className="text-green-600" size={20} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-black text-green-900 truncate">{pdf.name}</p>
-                      <p className="text-[10px] text-green-700 font-bold uppercase">RAG Context Active</p>
-                    </div>
-                    <button onClick={() => setPdf(null)} className="p-1 hover:bg-green-200 rounded-full transition-colors">
-                      <XCircle size={16} className="text-green-800" />
-                    </button>
+              {pdf ? (
+                <div className="p-4 bg-green-50 border border-green-200 rounded-2xl flex items-center space-x-3">
+                  <ShieldCheck className="text-green-600" size={20} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-black text-green-900 truncate">{pdf.name}</p>
+                    <p className="text-[10px] text-green-700 font-bold uppercase">RAG Mode Active</p>
                   </div>
-                ) : (
-                  <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-3xl p-8 hover:border-blue-400 hover:bg-blue-50/50 cursor-pointer transition-all group">
-                    <BookOpen className="text-gray-200 mb-3 group-hover:text-blue-200 transition-colors" size={40} />
-                    <span className="text-xs font-black text-gray-600">UPLOAD TEXTBOOK</span>
-                    <input type="file" accept="application/pdf" className="hidden" onChange={handleFileUpload} />
-                  </label>
-                )}
-              </div>
+                  <button onClick={() => setPdf(null)} className="p-1 hover:bg-green-200 rounded-full">
+                    <XCircle size={16} className="text-green-800" />
+                  </button>
+                </div>
+              ) : (
+                <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-3xl p-8 hover:border-blue-400 hover:bg-blue-50 cursor-pointer transition-all">
+                  <BookOpen className="text-gray-200 mb-3" size={40} />
+                  <span className="text-xs font-black text-gray-600">UPLOAD TEXTBOOK</span>
+                  <input type="file" accept="application/pdf" className="hidden" onChange={handleFileUpload} />
+                </label>
+              )}
             </div>
 
             <div className="bg-gray-900 p-6 rounded-3xl text-white shadow-xl flex-1">
-              <h3 className="text-xs font-black text-blue-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                <Settings size={14} /> Stability Monitor
-              </h3>
+              <h3 className="text-xs font-black text-blue-400 uppercase tracking-widest mb-4">Pipeline Status</h3>
               <div className="space-y-4">
-                <Metric label="Language Model" value="Gemini 2.5 Live" />
-                <Metric label="Turn Loop" value="7s + Grace Period" />
-                <Metric label="Inertia Mode" value="Active (Anti-Cut)" />
-                <Metric label="Session State" value="Persistent" />
+                <Metric label="Model" value="Gemini 2.5 Live" />
+                <Metric label="Latency" value="Ultra Low" />
+                <Metric label="Audio" value="PCM @ 24kHz" />
               </div>
             </div>
           </div>
@@ -429,23 +418,13 @@ const App: React.FC = () => {
 
 const Metric = ({ label, value }: { label: string, value: string }) => (
   <div className="flex justify-between items-center text-[10px] font-bold">
-    <span className="text-gray-500 uppercase tracking-tighter">{label}</span>
+    <span className="text-gray-500 uppercase">{label}</span>
     <span className="text-blue-100">{value}</span>
   </div>
 );
 
 const Volume2Icon = ({ className, size }: { className?: string, size?: number }) => (
-  <svg 
-    width={size} 
-    height={size} 
-    viewBox="0 0 24 24" 
-    fill="none" 
-    stroke="currentColor" 
-    strokeWidth="3" 
-    strokeLinecap="round" 
-    strokeLinejoin="round" 
-    className={`${className} animate-pulse`}
-  >
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className={className}>
     <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
     <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
     <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
@@ -453,45 +432,21 @@ const Volume2Icon = ({ className, size }: { className?: string, size?: number })
 );
 
 const ArchitectureView = () => (
-  <div className="w-full max-w-4xl bg-white rounded-3xl border border-gray-100 shadow-2xl overflow-y-auto p-12 h-[700px]">
-    <div className="max-w-2xl mx-auto space-y-16">
-      <header className="text-center space-y-4">
-        <h2 className="text-4xl font-black text-gray-900 tracking-tighter uppercase text-blue-600">Audio Processing 2.0</h2>
-        <p className="text-gray-500 font-medium">Ultra-low latency student reception infrastructure</p>
-      </header>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-        <ArchCard 
-          icon={<Zap className="text-blue-500" />}
-          title="Direct Byte Streaming"
-          desc="Audio is ingested as raw Int16 PCM at 16kHz, converted to Base64, and streamed without intermediate text buffers."
-        />
-        <ArchCard 
-          icon={<Cpu className="text-purple-500" />}
-          title="Turn-Persistence Engine"
-          desc="Ensures the conversational loop stays open. Gating logic prevents mic cutoff even when the UI transitions between states."
-        />
-        <ArchCard 
-          icon={<Database className="text-orange-500" />}
-          title="RAG Pinning"
-          desc="Uploaded textbooks are injected into the model's system context, forcing strict adherence to curricula without hallucination."
-        />
-        <ArchCard 
-          icon={<Layout className="text-green-500" />}
-          title="Dynamic Synthesis"
-          desc="Model audio is decoded and scheduled using precise Web Audio API timestamps for gapless multi-turn responses."
-        />
-      </div>
+  <div className="w-full max-w-4xl bg-white rounded-3xl border border-gray-100 shadow-2xl p-12 overflow-y-auto max-h-[700px]">
+    <h2 className="text-4xl font-black text-gray-900 uppercase tracking-tighter mb-12">System Architecture</h2>
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+      <ArchCard title="Real-time Audio" desc="Raw PCM streaming directly to Gemini's neural layers without STT overhead." />
+      <ArchCard title="RAG Integration" desc="PDF context injection into the system prompt for high-fidelity grounding." />
+      <ArchCard title="Native Multilingual" desc="Seamless English/Hindi toggling driven by natural language intent." />
+      <ArchCard title="Scheduled Playback" desc="Gapless audio synthesis using high-precision Web Audio API buffers." />
     </div>
   </div>
 );
 
-const ArchCard = ({ icon, title, desc }: { icon: React.ReactNode, title: string, desc: string }) => (
-  <div className="space-y-4 p-8 rounded-[2rem] border-2 border-gray-50 bg-white shadow-sm">
-    <div className="w-12 h-12 bg-gray-50 rounded-2xl flex items-center justify-center">
-      {icon}
-    </div>
-    <h3 className="font-black text-gray-800 text-lg uppercase tracking-tight">{title}</h3>
-    <p className="text-sm text-gray-500 leading-relaxed font-medium">{desc}</p>
+const ArchCard = ({ title, desc }: { title: string, desc: string }) => (
+  <div className="p-8 bg-gray-50 rounded-3xl border border-gray-100">
+    <h3 className="text-lg font-black text-gray-900 uppercase tracking-tight mb-2">{title}</h3>
+    <p className="text-sm text-gray-500 leading-relaxed">{desc}</p>
   </div>
 );
 
