@@ -1,18 +1,42 @@
 
-// This would typically use pdfjs-dist but for the sake of this demo, 
-// we'll use a standard file reader and note that in a real environment 
-// we'd extract text properly.
+/**
+ * Real PDF Text Extraction Service
+ * Uses pdfjs-dist via ESM to parse uploaded PDF files.
+ */
+
+// We use a specific version of pdfjs-dist that is compatible with browser ESM
+const PDFJS_URL = 'https://esm.sh/pdfjs-dist@4.0.379';
+const PDFJS_WORKER_URL = 'https://esm.sh/pdfjs-dist@4.0.379/build/pdf.worker.mjs';
+
 export const extractTextFromPDF = async (file: File): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      // Dummy extraction for demo purposes. 
-      // In production, we use pdfjs-dist here.
-      resolve(`This is a mock content extracted from ${file.name}. 
-      Chapter 1: The Solar System. The Sun is at the center of the solar system. 
-      It is a star. There are 8 planets. Jupiter is the largest.`);
-    };
-    reader.onerror = reject;
-    reader.readAsArrayBuffer(file);
-  });
+  try {
+    const pdfjs = await import(PDFJS_URL);
+    pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+
+    const arrayBuffer = await file.arrayBuffer();
+    const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
+    const pdf = await loadingTask.promise;
+    
+    let fullText = "";
+    // Limit to first 20 pages to keep context window manageable for the Live API
+    const pageLimit = Math.min(pdf.numPages, 20);
+
+    for (let i = 1; i <= pageLimit; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item: any) => item.str)
+        .join(" ");
+      fullText += `[Page ${i}]\n${pageText}\n\n`;
+    }
+
+    if (!fullText.trim()) {
+      throw new Error("No text content found in PDF. It might be an image-only PDF.");
+    }
+
+    return fullText;
+  } catch (error) {
+    console.error("PDF Extraction Failed:", error);
+    return `Error extracting text from PDF: ${error instanceof Error ? error.message : 'Unknown error'}`;
+  }
 };

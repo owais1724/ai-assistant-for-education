@@ -5,12 +5,11 @@ import { SYSTEM_PROMPT } from "../constants.ts";
 export const getAIClient = () => {
   let apiKey = '';
   try {
-    // Prevent ReferenceError: process is not defined on static hosts
-    if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
-      apiKey = process.env.API_KEY;
-    }
+    // Safely check for API_KEY in various possible environments
+    const env = (globalThis as any).process?.env || {};
+    apiKey = env.API_KEY || '';
   } catch (e) {
-    console.warn("Murshid AI: API Key environment check bypassed.");
+    console.warn("Murshid AI: Environment check bypassed.");
   }
   
   return new GoogleGenAI({ apiKey: apiKey });
@@ -41,7 +40,7 @@ export async function decodeAudioData(
   sampleRate: number,
   numChannels: number,
 ): Promise<AudioBuffer> {
-  // Use byteOffset to handle slices of ArrayBuffers correctly
+  // Ensure we don't try to read past the end of the buffer
   const alignedLength = data.length - (data.length % 2);
   const dataInt16 = new Int16Array(data.buffer, data.byteOffset, alignedLength / 2);
   
