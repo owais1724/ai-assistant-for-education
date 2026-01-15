@@ -1,5 +1,5 @@
 {
-  "name": "Murshid AI - Virtual Receptionist",
+  "name": "Murshid AI - Virtual Receptionist working",
   "description": "A voice-powered AI receptionist for the Murshid education platform, featuring PDF-based RAG, multilingual support, and automated conversation loops.",
   "requestFramePermissions": [
     "microphone"

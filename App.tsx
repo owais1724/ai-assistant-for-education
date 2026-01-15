@@ -1,9 +1,9 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { 
-  Mic, BookOpen, Info, ShieldCheck, 
+  Mic, BookOpen, ShieldCheck, 
   MessageSquare, Upload, Settings, 
-  Layout, Cpu, Database, Zap, XCircle, Loader2
+  Zap, XCircle, Loader2, AlertCircle, Headphones, Activity
 } from 'lucide-react';
 import { AppState, PDFMetadata } from './types.ts';
 import { SYSTEM_PROMPT } from './constants.ts';
@@ -27,6 +27,7 @@ const App: React.FC = () => {
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const stateRef = useRef<AppState>(AppState.IDLE);
   const isModelSpeakingRef = useRef<boolean>(false);
+  const isClosingRef = useRef<boolean>(false);
 
   useEffect(() => {
     stateRef.current = state;
@@ -39,15 +40,18 @@ const App: React.FC = () => {
     isModelSpeakingRef.current = false;
   }, []);
 
-  const cleanupSession = useCallback(async () => {
-    console.log("Murshid AI: Session Terminated");
+  const cleanupSession = useCallback(async (isError = false) => {
+    if (isClosingRef.current && !isError) return;
+    isClosingRef.current = true;
+
+    console.log("Murshid AI: Ending session...");
     setState(AppState.IDLE);
     stopPlaybackNow();
 
     if (sessionRef.current) {
       try {
         const session = await sessionRef.current;
-        if (session && typeof session.close === 'function') session.close();
+        if (session) session.close();
       } catch (e) {}
       sessionRef.current = null;
     }
@@ -69,11 +73,15 @@ const App: React.FC = () => {
       await audioContextOutRef.current.close().catch(() => {});
       audioContextOutRef.current = null;
     }
+    
+    isClosingRef.current = false;
   }, [stopPlaybackNow]);
 
   const handleIncomingAudio = async (base64: string) => {
     const ctx = audioContextOutRef.current;
     if (!ctx || stateRef.current === AppState.IDLE) return;
+
+    if (ctx.state === 'suspended') await ctx.resume();
 
     if (stateRef.current !== AppState.SPEAKING) {
       setState(AppState.SPEAKING);
@@ -81,7 +89,11 @@ const App: React.FC = () => {
 
     try {
       const buffer = await decodeAudioData(decodeBase64(base64), ctx, 24000, 1);
-      nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
+      
+      if (nextStartTimeRef.current < ctx.currentTime) {
+        nextStartTimeRef.current = ctx.currentTime + 0.08;
+      }
+      
       const source = ctx.createBufferSource();
       source.buffer = buffer;
       source.connect(ctx.destination);
@@ -94,7 +106,7 @@ const App: React.FC = () => {
             if (!isModelSpeakingRef.current && stateRef.current === AppState.SPEAKING) {
               setState(AppState.LISTENING);
             }
-          }, 300);
+          }, 400);
         }
       };
 
@@ -103,7 +115,7 @@ const App: React.FC = () => {
       sourcesRef.current.add(source);
       isModelSpeakingRef.current = true;
     } catch (e) {
-      console.error("Murshid AI: Audio Decoding Failed", e);
+      console.error("Murshid AI: Playback sequence interrupted", e);
     }
   };
 
@@ -116,7 +128,7 @@ const App: React.FC = () => {
     scriptProcessorRef.current = processor;
 
     processor.onaudioprocess = (e) => {
-      if (stateRef.current === AppState.IDLE || stateRef.current === AppState.SPEAKING) return;
+      if (stateRef.current !== AppState.LISTENING) return;
 
       const inputData = e.inputBuffer.getChannelData(0);
       const int16 = new Int16Array(inputData.length);
@@ -126,7 +138,7 @@ const App: React.FC = () => {
       
       const base64 = encodeBase64(new Uint8Array(int16.buffer));
       sessionPromise.then(session => {
-        if (session && stateRef.current !== AppState.SPEAKING) {
+        if (session && stateRef.current === AppState.LISTENING) {
           session.sendRealtimeInput({
             media: { data: base64, mimeType: 'audio/pcm;rate=16000' }
           });
@@ -142,16 +154,18 @@ const App: React.FC = () => {
     if (stateRef.current !== AppState.IDLE) return;
 
     try {
-      setState(AppState.PROCESSING);
       const ai = getAIClient();
+      if (!(ai as any).apiKey && !(globalThis as any).process?.env?.API_KEY) {
+        alert("Murshid AI: Please configure your API_KEY to start the session.");
+        return;
+      }
+
+      setState(AppState.PROCESSING);
       
       const audioContextIn = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       const audioContextOut = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       audioContextInRef.current = audioContextIn;
       audioContextOutRef.current = audioContextOut;
-
-      await audioContextIn.resume();
-      await audioContextOut.resume();
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       micStreamRef.current = stream;
@@ -164,12 +178,12 @@ const App: React.FC = () => {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
           },
           systemInstruction: pdf 
-            ? `${SYSTEM_PROMPT}\n\n[TEXTBOOK CONTEXT (PRIORITY SOURCE)]:\n${pdf.content}` 
+            ? `${SYSTEM_PROMPT}\n\n[TEXTBOOK CONTEXT (PRIORITY SOURCE)]:\n${pdf.content}\n\n[IMPORTANT]: Use this content for all academic questions.` 
             : SYSTEM_PROMPT,
         },
         callbacks: {
           onopen: () => {
-            console.log("Murshid AI: Session Active");
+            console.log("Murshid AI: Neural Link Established");
             setState(AppState.LISTENING);
             setupMicStreaming(stream, sessionPromise);
           },
@@ -185,17 +199,22 @@ const App: React.FC = () => {
             }
 
             if (message.serverContent?.turnComplete) {
+              if (audioContextInRef.current?.state === 'suspended') audioContextInRef.current.resume();
+              if (audioContextOutRef.current?.state === 'suspended') audioContextOutRef.current.resume();
+
               if (!isModelSpeakingRef.current) {
                 setState(AppState.LISTENING);
               }
             }
           },
           onerror: (e) => {
-            console.error("Murshid AI: Connection Failure", e);
-            cleanupSession();
+            console.error("Murshid AI: Session encountered an error", e);
+            cleanupSession(true);
           },
-          onclose: () => {
-            cleanupSession();
+          onclose: (e) => {
+            if (!isClosingRef.current) {
+              cleanupSession();
+            }
           }
         }
       });
@@ -203,8 +222,9 @@ const App: React.FC = () => {
       sessionRef.current = sessionPromise;
 
     } catch (err) {
-      console.error("Murshid AI: Boot Error", err);
-      cleanupSession();
+      console.error("Murshid AI: Boot sequence failed", err);
+      cleanupSession(true);
+      alert("Microphone access or connection failed. Please check permissions.");
     }
   };
 
@@ -215,8 +235,10 @@ const App: React.FC = () => {
       try {
         const content = await extractTextFromPDF(file);
         setPdf({ name: file.name, content });
-      } catch (err) {
-        alert("Failed to read PDF content.");
+      } catch (err: any) {
+        // Detailed error reporting for PDF issues
+        const errorMsg = err instanceof Error ? err.message : "PDF processing failed.";
+        alert(`Textbook Error: ${errorMsg}`);
       } finally {
         setIsReadingPdf(false);
       }
@@ -224,101 +246,114 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-white flex flex-col items-center p-4 md:p-8">
-      <header className="w-full max-w-4xl flex justify-between items-center mb-12">
+    <div className="min-h-screen bg-[#fcfcfc] flex flex-col items-center p-4 md:p-8">
+      <header className="w-full max-w-4xl flex justify-between items-center mb-8">
         <div className="flex items-center space-x-3">
-          <div className="p-2.5 bg-blue-600 rounded-2xl text-white shadow-lg shadow-blue-200">
-            <BookOpen size={24} />
+          <div className="p-2.5 bg-blue-600 rounded-xl text-white shadow-xl shadow-blue-100">
+            <Headphones size={22} />
           </div>
           <div>
-            <h1 className="text-2xl font-black text-gray-900 tracking-tighter">Murshid AI</h1>
-            <div className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Digital Learning Assistant</p>
+            <h1 className="text-xl font-black text-gray-900 tracking-tight">Murshid <span className="text-blue-600">Voice</span></h1>
+            <div className="flex items-center gap-1.5">
+              <div className={`w-2 h-2 rounded-full ${state === AppState.IDLE ? 'bg-gray-300' : 'bg-green-500 animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.6)]'}`} />
+              <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">
+                {state === AppState.IDLE ? 'Link Idle' : 'Neural Stream Active'}
+              </p>
             </div>
           </div>
         </div>
-        <button 
-          onClick={() => setShowArchitecture(!showArchitecture)}
-          className="p-2 text-gray-400 hover:text-blue-600 transition-colors"
-        >
-          <Settings size={20} />
-        </button>
+        <div className="flex items-center gap-2">
+           {state !== AppState.IDLE && (
+             <div className="flex items-center gap-1 px-3 py-1 bg-blue-50 text-blue-600 rounded-full border border-blue-100 animate-pulse">
+               <Activity size={12} />
+               <span className="text-[10px] font-bold uppercase">Live</span>
+             </div>
+           )}
+           <button className="p-2 text-gray-400 hover:text-blue-600 transition-colors">
+            <Settings size={18} />
+          </button>
+        </div>
       </header>
 
-      <main className="w-full max-w-xl flex-1 flex flex-col items-center justify-center space-y-12 pb-20">
-        <div className="relative group">
-          <div className={`absolute inset-0 rounded-full blur-3xl transition-opacity duration-1000 ${
-            state === AppState.LISTENING ? 'bg-blue-400/20 opacity-100' :
-            state === AppState.SPEAKING ? 'bg-indigo-400/20 opacity-100' : 'bg-gray-100/0 opacity-0'
+      <main className="w-full max-w-md flex-1 flex flex-col items-center justify-center space-y-12 pb-20">
+        <div className="relative">
+          <div className={`absolute -inset-12 rounded-full blur-[60px] transition-opacity duration-1000 ${
+            state === AppState.LISTENING ? 'bg-blue-400/15 opacity-100' :
+            state === AppState.SPEAKING ? 'bg-indigo-400/15 opacity-100' : 'opacity-0'
           }`} />
           
-          <div className={`w-48 h-48 rounded-full border-4 flex items-center justify-center relative transition-all duration-500 ${
-            state === AppState.LISTENING ? 'border-blue-500 bg-blue-50 scale-110 shadow-2xl shadow-blue-100' :
-            state === AppState.SPEAKING ? 'border-indigo-500 bg-indigo-50 scale-105 shadow-2xl shadow-indigo-100' :
-            state === AppState.PROCESSING ? 'border-amber-400 bg-amber-50 animate-pulse' : 'border-gray-100 bg-white'
+          <div className={`w-44 h-44 rounded-full border-2 flex items-center justify-center relative transition-all duration-500 ${
+            state === AppState.LISTENING ? 'border-blue-500 bg-white scale-110 shadow-2xl shadow-blue-50' :
+            state === AppState.SPEAKING ? 'border-indigo-500 bg-white scale-105 shadow-2xl shadow-indigo-50' :
+            state === AppState.PROCESSING ? 'border-amber-400 bg-white animate-pulse' : 'border-gray-100 bg-white'
           }`}>
             {state === AppState.LISTENING && (
-              <div className="absolute inset-0 rounded-full border-2 border-blue-400 animate-ping opacity-25" />
+              <div className="absolute inset-0 rounded-full border border-blue-400 animate-[ping_2s_infinite] opacity-10" />
             )}
             
             {state === AppState.SPEAKING ? (
-              <VolumeIcon className="text-indigo-600" size={64} />
+              <div className="flex gap-1.5 items-center h-12">
+                {[1,2,3,4].map(i => (
+                  <div 
+                    key={i} 
+                    className="w-1.5 bg-indigo-600 rounded-full animate-bounce" 
+                    style={{
+                      height: `${20 + (i * 10)}px`,
+                      animationDelay: `${i*0.1}s`,
+                      animationDuration: '0.6s'
+                    }} 
+                  />
+                ))}
+              </div>
             ) : state === AppState.LISTENING ? (
-              <Mic className="text-blue-600" size={64} />
+              <Mic className="text-blue-600" size={56} />
             ) : state === AppState.PROCESSING ? (
-              <Zap className="text-amber-500" size={64} />
+              <Zap className="text-amber-500" size={56} />
             ) : (
-              <MessageSquare className="text-gray-200" size={64} />
+              <MessageSquare className="text-gray-200" size={56} />
             )}
           </div>
         </div>
 
-        <div className="text-center space-y-4">
-          <h2 className="text-3xl font-black text-gray-900 tracking-tight uppercase">
+        <div className="text-center w-full">
+          <h2 className="text-2xl font-black text-gray-900 mb-2 tracking-tight">
             {state === AppState.IDLE ? "Start Session" : 
-             state === AppState.LISTENING ? "I'm Listening" : 
-             state === AppState.SPEAKING ? "Murshid AI" : "Processing..."}
+             state === AppState.LISTENING ? "Listening..." : 
+             state === AppState.SPEAKING ? "Murshid Responding" : "Analyzing Text..."}
           </h2>
-          <p className="text-gray-500 font-medium max-w-xs mx-auto">
-            {state === AppState.IDLE ? "Connect to start your personalized academic guidance session." : 
-             state === AppState.LISTENING ? "Ask questions from your textbook or about Murshid platform." : 
-             "Synthesizing knowledge for a real-time response."}
-          </p>
+          <Visualizer state={state} />
         </div>
 
-        <Visualizer state={state} />
-
-        <div className="w-full flex flex-col gap-4">
+        <div className="w-full space-y-4">
           {state === AppState.IDLE ? (
             <button
               onClick={startLiveConversation}
-              className="w-full py-6 rounded-3xl bg-gray-900 text-white font-black text-xl hover:bg-black transition-all transform active:scale-[0.98] shadow-2xl shadow-gray-200 flex items-center justify-center gap-3"
+              className="w-full py-5 rounded-2xl bg-gray-900 text-white font-bold text-lg hover:bg-black transition-all shadow-xl shadow-gray-200 flex items-center justify-center gap-3 transform active:scale-[0.98]"
             >
-              <Zap size={24} className="fill-current text-amber-400" />
-              ACTIVATE VOICE
+              <Zap size={20} className="text-amber-400" />
+              ACTIVATE TUTOR
             </button>
           ) : (
             <button
-              onClick={cleanupSession}
-              className="w-full py-6 rounded-3xl bg-red-50 text-red-600 border-2 border-red-100 font-black text-xl hover:bg-red-600 hover:text-white transition-all transform active:scale-[0.98] flex items-center justify-center gap-3"
+              onClick={() => cleanupSession()}
+              className="w-full py-5 rounded-2xl bg-white text-red-600 border border-red-100 font-bold text-lg hover:bg-red-50 transition-all flex items-center justify-center gap-3 transform active:scale-[0.98]"
             >
-              <XCircle size={24} />
-              END SESSION
+              <XCircle size={20} />
+              END CONVERSATION
             </button>
           )}
 
           {!pdf && state === AppState.IDLE && (
-            <label className={`w-full py-4 border-2 border-dashed rounded-3xl flex items-center justify-center gap-2 cursor-pointer transition-all ${isReadingPdf ? 'bg-gray-50 border-gray-300' : 'border-gray-200 hover:border-blue-400 hover:bg-blue-50'}`}>
+            <label className={`w-full py-4 border border-dashed rounded-2xl flex items-center justify-center gap-2 cursor-pointer transition-all ${isReadingPdf ? 'bg-blue-50 border-blue-300 animate-pulse' : 'border-gray-200 hover:border-blue-400 hover:bg-blue-50'}`}>
               {isReadingPdf ? (
                 <>
-                  <Loader2 size={18} className="text-blue-600 animate-spin" />
-                  <span className="text-sm font-bold text-blue-600">Reading Textbook...</span>
+                  <Loader2 size={16} className="text-blue-600 animate-spin" />
+                  <span className="text-xs font-bold text-blue-600">Reconstructing Layout...</span>
                 </>
               ) : (
                 <>
-                  <Upload size={18} className="text-gray-400" />
-                  <span className="text-sm font-bold text-gray-500">Upload Textbook (PDF)</span>
+                  <Upload size={16} className="text-gray-400" />
+                  <span className="text-xs font-bold text-gray-500">Upload Textbook (PDF)</span>
                 </>
               )}
               <input type="file" accept="application/pdf" className="hidden" onChange={handleFileUpload} disabled={isReadingPdf} />
@@ -326,38 +361,32 @@ const App: React.FC = () => {
           )}
 
           {pdf && (
-            <div className="p-4 bg-green-50 border border-green-200 rounded-2xl flex items-center justify-between animate-in fade-in slide-in-from-bottom-2">
+            <div className="p-4 bg-green-50 border border-green-100 rounded-xl flex items-center justify-between animate-in fade-in slide-in-from-bottom-2">
               <div className="flex items-center gap-3">
-                <ShieldCheck className="text-green-600" size={20} />
-                <span className="text-xs font-black text-green-900 uppercase truncate max-w-[200px]">{pdf.name}</span>
+                <ShieldCheck className="text-green-600" size={18} />
+                <span className="text-[10px] font-bold text-green-900 uppercase tracking-tighter truncate max-w-[200px]">{pdf.name}</span>
               </div>
-              <button 
-                onClick={() => setPdf(null)} 
-                className="text-green-800 hover:text-red-600 transition-colors"
-                disabled={state !== AppState.IDLE}
-              >
-                <XCircle size={18} />
-              </button>
+              {state === AppState.IDLE && (
+                <button onClick={() => setPdf(null)} className="text-green-800 hover:text-red-600 transition-colors">
+                  <XCircle size={16} />
+                </button>
+              )}
             </div>
           )}
         </div>
       </main>
 
-      <footer className="mt-auto py-8 text-center">
-        <p className="text-[10px] font-black text-gray-300 uppercase tracking-[0.3em]">
-          Engineered for Class 1-10 Excellence
+      <footer className="mt-auto py-6 text-center">
+        <div className="flex items-center justify-center gap-2 mb-1">
+          <AlertCircle size={10} className="text-gray-400" />
+          <p className="text-[9px] font-bold text-gray-400 uppercase tracking-[0.2em]">Enhanced Layout RAG Enabled</p>
+        </div>
+        <p className="text-[10px] font-black text-gray-200 uppercase tracking-[0.3em]">
+          Class 1-10 Learning Framework
         </p>
       </footer>
     </div>
   );
 };
-
-const VolumeIcon = ({ className, size }: { className?: string, size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className={`${className} animate-pulse`}>
-    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-    <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-    <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-  </svg>
-);
 
 export default App;
