@@ -1,57 +1,58 @@
+import { GoogleGenerativeAI } from "@google/genai";
 
-import { GoogleGenAI, Modality } from "@google/genai";
-import { SYSTEM_PROMPT } from "../constants.ts";
+/**
+ * Creates and returns Gemini AI client
+ * Works in Vite + React frontend
+ */
+export function getAIClient() {
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 
-export const getAIClient = () => {
-  let apiKey = '';
-  try {
-    // Safely check for API_KEY in various possible environments
-    const env = (globalThis as any).process?.env || {};
-    apiKey = env.API_KEY || '';
-  } catch (e) {
-    console.warn("Murshid AI: Environment check bypassed.");
+  if (!apiKey) {
+    console.error("❌ VITE_GEMINI_API_KEY missing");
+    throw new Error("Gemini API key not found");
   }
-  
-  return new GoogleGenAI({ apiKey: apiKey });
-};
 
-export function encodeBase64(bytes: Uint8Array) {
-  let binary = '';
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
+  return new GoogleGenerativeAI(apiKey);
+}
+
+/**
+ * Audio + base64 helpers (unchanged)
+ */
+export function encodeBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
     binary += String.fromCharCode(bytes[i]);
   }
   return btoa(binary);
 }
 
-export function decodeBase64(base64: string) {
-  const binaryString = atob(base64);
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
+export function decodeBase64(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
 }
 
 export async function decodeAudioData(
-  data: Uint8Array,
-  ctx: AudioContext,
+  bytes: Uint8Array,
+  audioContext: AudioContext,
   sampleRate: number,
-  numChannels: number,
+  channels: number
 ): Promise<AudioBuffer> {
-  // Ensure we don't try to read past the end of the buffer
-  const alignedLength = data.length - (data.length % 2);
-  const dataInt16 = new Int16Array(data.buffer, data.byteOffset, alignedLength / 2);
-  
-  const frameCount = dataInt16.length / numChannels;
-  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
+  const buffer = audioContext.createBuffer(
+    channels,
+    bytes.length / 2,
+    sampleRate
+  );
 
-  for (let channel = 0; channel < numChannels; channel++) {
-    const channelData = buffer.getChannelData(channel);
-    for (let i = 0; i < frameCount; i++) {
-      channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
-    }
+  const dataView = new DataView(bytes.buffer);
+  const channelData = buffer.getChannelData(0);
+
+  for (let i = 0; i < channelData.length; i++) {
+    channelData[i] = dataView.getInt16(i * 2, true) / 32768;
   }
+
   return buffer;
 }
